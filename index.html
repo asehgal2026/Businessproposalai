@@ -69,6 +69,29 @@ a{color:var(--accent-deep);}
 .topbar .brand-text span{font-size:11.5px;color:#C9BFA0;letter-spacing:.03em;text-transform:uppercase;}
 .topbar-actions{display:flex;gap:10px;}
 
+/* ---------- Cloud Save/Load Modal ---------- */
+.cloud-modal-overlay{
+  position:fixed; inset:0; background:rgba(27,36,48,.55);
+  z-index:100; display:flex; align-items:center; justify-content:center;
+  padding:20px;
+}
+.cloud-modal{
+  background:var(--panel); border-radius:var(--radius); border:1px solid var(--line);
+  max-width:560px; width:100%; max-height:80vh; overflow-y:auto;
+  box-shadow:var(--shadow);
+}
+.cloud-modal-head{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:18px 22px; border-bottom:1px solid var(--line-soft);
+}
+.cloud-modal-body{padding:20px 22px 24px;}
+.cloud-plan-item{
+  border:1px solid var(--line); border-radius:8px; padding:12px 14px;
+  display:flex; justify-content:space-between; align-items:center; gap:10px;
+}
+.cloud-plan-item .meta{font-size:12.5px; color:var(--ink-soft);}
+.cloud-plan-item b{font-family:'Fraunces',serif; font-size:15px;}
+
 /* ---------- Layout ---------- */
 .shell{
   max-width:1320px;
@@ -337,7 +360,27 @@ table.fintable tbody tr.indent td:first-child{padding-left:22px; color:var(--ink
   </div>
   <div class="topbar-actions">
     <button class="btn btn-ghost" onclick="loadSample()">Load Sample Data</button>
+    <button class="btn btn-ghost" onclick="openMyPlans()">My Saved Plans</button>
+    <button class="btn btn-ghost" id="btn_save_cloud" onclick="savePlanToCloud()">☁ Save Plan</button>
     <button class="btn btn-primary" onclick="runProjections()">Generate Projections ↓</button>
+  </div>
+</div>
+
+<div id="cloudModalOverlay" class="cloud-modal-overlay no-print" style="display:none;">
+  <div class="cloud-modal">
+    <div class="cloud-modal-head">
+      <h3 id="cloudModalTitle">My Saved Plans</h3>
+      <button class="btn btn-ghost" style="color:var(--ink); border-color:var(--line);" onclick="closeCloudModal()">✕ Close</button>
+    </div>
+    <div class="cloud-modal-body">
+      <div class="field" style="margin-bottom:14px;">
+        <label>Your Email (used to find your saved plans)</label>
+        <input id="cloud_userKey" type="email" placeholder="you@example.com">
+      </div>
+      <div id="cloudStatus" style="font-size:13px; color:var(--ink-soft); margin-bottom:10px;"></div>
+      <button class="btn btn-dark" onclick="fetchMyPlans()">Load My Plans</button>
+      <div id="cloudPlansList" style="margin-top:16px; display:flex; flex-direction:column; gap:10px;"></div>
+    </div>
   </div>
 </div>
 
@@ -1197,6 +1240,186 @@ function exportPDF(){
     pagebreak:    { mode: ['css','avoid-all'] }
   };
   html2pdf().set(opt).from(el).save();
+}
+</script>
+
+<script>
+/* ============================================================
+   GOOGLE SHEETS SAVE / LOAD
+   ============================================================ */
+// Paste your Apps Script Web App URL here (Deploy → New deployment → Web app):
+https://script.google.com/macros/s/AKfycbx3ciumiOpOxvUyo-7e4zIfoccdp4BqPNpkaSJCbSfj73JqoUBDsqhaMd54hq09uLuv/exec
+
+// Restore last-used email so returning visitors don't retype it
+window.addEventListener('DOMContentLoaded', () => {
+  const saved = localStorage.getItem('planBuilderUserKey');
+  if (saved) $('cloud_userKey').value = saved;
+});
+
+function openMyPlans(){
+  $('cloudModalOverlay').style.display = 'flex';
+  $('cloudStatus').textContent = '';
+  $('cloudPlansList').innerHTML = '';
+}
+function closeCloudModal(){
+  $('cloudModalOverlay').style.display = 'none';
+}
+
+function savePlanToCloud(){
+  if(CLOUD_SCRIPT_URL.indexOf('PASTE_YOUR') === 0){
+    alert('Cloud save is not configured yet — add your Apps Script Web App URL to CLOUD_SCRIPT_URL in the code.');
+    return;
+  }
+  const userKey = (prompt('Enter your email to save this plan (used later to find it):', localStorage.getItem('planBuilderUserKey') || '') || '').trim();
+  if(!userKey){ return; }
+  localStorage.setItem('planBuilderUserKey', userKey);
+
+  if(!LAST_MODEL){ runProjections(); }
+  const inp = JSON.parse(JSON.stringify(LAST_INPUTS));
+  inp.restaurantTypeValue = $('restaurantType').value; // needed to restore the dropdown exactly
+
+  const payload = {
+    entryId: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())),
+    userKey: userKey,
+    bizName: inp.bizName,
+    inputs: inp,
+    outputs: LAST_MODEL
+  };
+
+  const btn = $('btn_save_cloud');
+  const original = btn.textContent;
+  btn.textContent = 'Saving…'; btn.disabled = true;
+
+  fetch(CLOUD_SCRIPT_URL, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: { 'Content-Type': 'text/plain' } // avoids CORS preflight on Apps Script
+  })
+    .then(res => res.json())
+    .then(data => {
+      btn.textContent = original; btn.disabled = false;
+      if(data.result === 'success'){
+        alert('Plan saved. You can reload it anytime from "My Saved Plans" using the same email.');
+      } else {
+        alert('Save failed: ' + (data.message || 'unknown error'));
+      }
+    })
+    .catch(err => {
+      btn.textContent = original; btn.disabled = false;
+      alert('Save failed: ' + err.message);
+    });
+}
+
+function fetchMyPlans(){
+  if(CLOUD_SCRIPT_URL.indexOf('PASTE_YOUR') === 0){
+    $('cloudStatus').textContent = 'Cloud save is not configured yet.';
+    return;
+  }
+  const userKey = $('cloud_userKey').value.trim();
+  if(!userKey){ $('cloudStatus').textContent = 'Enter your email first.'; return; }
+  localStorage.setItem('planBuilderUserKey', userKey);
+
+  $('cloudStatus').textContent = 'Loading…';
+  $('cloudPlansList').innerHTML = '';
+
+  fetch(CLOUD_SCRIPT_URL + '?userKey=' + encodeURIComponent(userKey))
+    .then(res => res.json())
+    .then(data => {
+      if(data.result !== 'success'){
+        $('cloudStatus').textContent = 'Error: ' + (data.message || 'unknown error');
+        return;
+      }
+      if(!data.entries.length){
+        $('cloudStatus').textContent = 'No saved plans found for this email yet.';
+        return;
+      }
+      $('cloudStatus').textContent = data.entries.length + ' plan(s) found:';
+      $('cloudPlansList').innerHTML = data.entries.map((entry, i) => {
+        const when = new Date(entry.timestamp).toLocaleString('en-US', {dateStyle:'medium', timeStyle:'short'});
+        const y1rev = entry.outputs && entry.outputs.years ? fmt$(entry.outputs.years[0].revenue) : '—';
+        return `<div class="cloud-plan-item">
+          <div>
+            <b>${escapeHtml(entry.bizName || 'Untitled Plan')}</b>
+            <div class="meta">Saved ${when} · Year 1 Revenue ${y1rev}</div>
+          </div>
+          <button class="btn btn-primary" onclick='loadPlanEntry(${i})'>Load</button>
+        </div>`;
+      }).join('');
+      window.CLOUD_ENTRIES = data.entries; // stash for loadPlanEntry
+    })
+    .catch(err => { $('cloudStatus').textContent = 'Error: ' + err.message; });
+}
+
+function loadPlanEntry(i){
+  const entry = window.CLOUD_ENTRIES[i];
+  if(!entry) return;
+  populateInputs(entry.inputs);
+  closeCloudModal();
+  runProjections();
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+// Reverse of collectInputs(): pushes a saved inputs object back into the form fields
+function populateInputs(inp){
+  $('bizName').value = inp.bizName || '';
+  if(inp.restaurantTypeValue) $('restaurantType').value = inp.restaurantTypeValue;
+  $('location').value = inp.location || '';
+  $('seats').value = inp.seats ?? '';
+  $('sqft').value = inp.sqft ?? '';
+  $('daysOpen').value = inp.daysOpen ?? '';
+
+  const su = inp.startup || {};
+  $('su_leasehold').value = su.leasehold ?? '';
+  $('su_kitchen').value = su.kitchen ?? '';
+  $('su_furniture').value = su.furniture ?? '';
+  $('su_pos').value = su.pos ?? '';
+  $('su_signage').value = su.signage ?? '';
+  $('su_inventory').value = su.inventory ?? '';
+  $('su_licenses').value = su.licenses ?? '';
+  $('su_deposits').value = su.deposits ?? '';
+  $('su_marketing').value = su.marketing ?? '';
+  $('su_profFees').value = su.profFees ?? '';
+  $('su_workingCap').value = su.workingCap ?? '';
+  $('su_contingencyPct').value = su.contingencyPct != null ? su.contingencyPct*100 : '';
+
+  const fin = inp.financing || {};
+  $('loanAmount').value = fin.loanAmount ?? '';
+  $('ownerEquity').value = fin.ownerEquity ?? '';
+  $('interestRate').value = fin.interestRate != null ? fin.interestRate*100 : '';
+  $('loanTerm').value = fin.loanTerm ?? '';
+  $('taxRate').value = fin.taxRate != null ? fin.taxRate*100 : '';
+
+  const rev = inp.revenue || {};
+  $('avgCheck').value = rev.avgCheck ?? '';
+  $('coversDay').value = rev.coversDay ?? '';
+  $('foodShare').value = rev.foodShare != null ? rev.foodShare*100 : '';
+  $('bevShare').value = rev.bevShare != null ? rev.bevShare*100 : '';
+  $('cateringRev').value = rev.cateringRev ?? '';
+  if(rev.growth){
+    $('g2').value = rev.growth[1]*100; $('g3').value = rev.growth[2]*100;
+    $('g4').value = rev.growth[3]*100; $('g5').value = rev.growth[4]*100;
+  }
+
+  const c = inp.costs || {};
+  $('foodCostPct').value = c.foodCostPct != null ? c.foodCostPct*100 : '';
+  $('bevCostPct').value = c.bevCostPct != null ? c.bevCostPct*100 : '';
+  $('mgmtSalary').value = c.mgmtSalary ?? '';
+  $('mgmtIncrease').value = c.mgmtIncrease != null ? c.mgmtIncrease*100 : '';
+  $('hourlyLaborPct').value = c.hourlyLaborPct != null ? c.hourlyLaborPct*100 : '';
+  $('payrollBurdenPct').value = c.payrollBurdenPct != null ? c.payrollBurdenPct*100 : '';
+  $('rentMonthly').value = c.rentMonthly ?? '';
+  $('rentEscalation').value = c.rentEscalation != null ? c.rentEscalation*100 : '';
+  $('utilitiesPct').value = c.utilitiesPct != null ? c.utilitiesPct*100 : '';
+  $('insuranceAnnual').value = c.insuranceAnnual ?? '';
+  $('marketingPct').value = c.marketingPct != null ? c.marketingPct*100 : '';
+  $('rmPct').value = c.rmPct != null ? c.rmPct*100 : '';
+  $('suppliesPct').value = c.suppliesPct != null ? c.suppliesPct*100 : '';
+  $('ccFeesPct').value = c.ccFeesPct != null ? c.ccFeesPct*100 : '';
+  $('adminAnnual').value = c.adminAnnual ?? '';
+  $('miscPct').value = c.miscPct != null ? c.miscPct*100 : '';
+  $('depreciationYears').value = c.depreciationYears ?? '';
+
+  refreshSnapshot();
 }
 </script>
 </body>
